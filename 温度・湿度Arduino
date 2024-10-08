@@ -1,0 +1,16 @@
+int x;
+
+void setup()
+{
+  Serial.begin(9600);
+}
+
+void loop()
+{
+  x = analogRead(0);
+ 
+  Serial.println(x);
+  analogWrite(9, (x-500)*255/(900-500));
+
+  delay(200);
+}
