@@ -1,0 +1,35 @@
+import processing.video.*;
+Capture capImg;
+
+void setup() {
+  //size(640, 480);
+  fullScreen();
+  String[] cameras = Capture.list();
+  // add
+  while (cameras.length == 0) {
+    cameras = Capture.list();
+  }
+  //
+  println("Available cameras:");
+  for (int i = 0; i < cameras.length; i++) {
+    println(i, cameras[i]);
+  }
+  capImg = new Capture(this, width, height, cameras[0]); 
+  //capImg = new Capture(this, width, height);
+  capImg.start(); 
+  frameRate(30);
+}
+
+void captureEvent(Capture capImg) {
+  capImg.read(); //キャプチャイベント
+}
+
+void draw() {
+  
+  //image(capImg, 0, 0 , width ,height);//元の映像は表示しない
+  
+  //元映像から反転してコピーする
+  copy(capImg, 0, 0 , width , height, width, 0 , -width, height);
+  
+  
+}
