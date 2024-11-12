@@ -1,0 +1,301 @@
+#define SECRET_SSID "elecom-4e9220"
+#define SECRET_PASS "45t625y68f89"
+
+#include <WiFiS3.h>
+#include <Wire.h>
+#include <Servo.h>
+
+#define ADR 0x38
+
+// Network credentials
+char ssid[] = SECRET_SSID;
+char pass[] = SECRET_PASS;
+int status = WL_IDLE_STATUS;
+WiFiServer server(80);
+WiFiClient client = server.available();
+
+#include <ArduinoHttpClient.h>
+const String token = "UyyjdReWpKSMhZt5cM637oVShuUZS3FCE4ijkeuLTdH";
+const char *serverAddress = "notify-api.line.me";
+const int port = 443;  // HTTPSを使用
+
+WiFiSSLClient wifiClient;
+HttpClient client(wifiClient, serverAddress, port);
+
+const int analogInPin = A0;    // アナログ入力ピン（定数）
+int   ad;   
+#include "Arduino_LED_Matrix.h"
+ArduinoLEDMatrix matrix;
+
+HttpClient clientForLine(client, serverAddress, port);
+
+Servo pushButtonServo;
+
+
+byte frame[8][12] = {
+{ 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0 },
+{ 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0 },
+{ 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0 },
+{ 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0 },
+{ 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0 },
+{ 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0 },
+{ 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0 },
+{ 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0 }
+};
+
+String currentLine = "";
+
+void setup() {
+  matrix.begin();
+  initializeSerial();
+  initializeWiFi();
+  initializeSensor();
+  startServer();
+
+  motor_servo.attach(7,500,2400);
+}
+
+void loop() {
+  ad = analogRead(analogInPin);         // AD値を取得
+  if (ad != 0)
+  {
+    matrix.renderBitmap(frame, 8, 12);
+    sendMessage("人が来た！");
+    handleClient();      
+  }
+}
+
+
+// Initialization functions
+void initializeSerial() {
+  Serial.begin(115200);
+  pinMode(LED_BUILTIN, OUTPUT);
+}
+
+void initializeWiFi() {
+  if (WiFi.status() == WL_NO_MODULE) {
+    Serial.println("Communication with WiFi module failed!");
+    while (true);
+  }
+
+  if (WiFi.firmwareVersion() < WIFI_FIRMWARE_LATEST_VERSION) {
+    Serial.println("Please upgrade the firmware");
+  }
+
+  connectToWiFi();
+}
+
+void connectToWiFi() {
+  while (status != WL_CONNECTED) {
+    Serial.print("Attempting to connect to Network named: ");
+    Serial.println(ssid);
+    status = WiFi.begin(ssid, pass);
+    delay(10000);
+  }
+  printWifiStatus();
+}
+
+void initializeSensor() {
+  Wire.begin();
+}
+
+void startServer() {
+  server.begin();
+  Serial.println("Server started");
+  printWifiStatus();
+}
+
+// Client handling functions
+void handleClient() {
+  if (client) {
+    Serial.println("New client");
+    processClientRequest(client);
+    client.stop();
+    Serial.println("Client disconnected");
+  }
+}
+
+void processClientRequest(WiFiClient& client) {
+  while (client.connected()) {
+    if (client.available()) {
+      char c = client.read();
+      Serial.write(c);
+
+      if (c == '\n') {
+        if (currentLine.length() == 0) {
+          sendHttpResponse(client);
+          break;
+        } else {
+          currentLine = "";
+        }
+      } else if (c != '\r') {
+        currentLine += c;
+      }
+
+      if (currentLine.endsWith("GET /H")) {
+        sendTemperatureHumidity(client);
+      }
+      if (currentLine.endsWith("GET /L")) {
+        sendFanSuggestion(client);
+      }
+    }
+  }
+}
+
+void sendFanSuggestion(WiFiClient& client) 
+{
+  /*motor_servo.write(0);
+  delay(1000);
+
+   motor_servo.write(90);
+  delay(1000);
+   
+  motor_servo.write(180);
+  delay(1000);*/
+}
+
+void sendHttpResponse(WiFiClient& client) {
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-type:text/html; charset=UTF-8");
+  client.println("Cache-Control: no-store, no-cache, must-revalidate, max-age=0"); // No-cache headers
+  client.println("Pragma: no-cache");
+  client.println();
+
+  // HTML content
+  client.println("<!DOCTYPE html>");
+  client.println("<html lang='ja'>");
+  client.println("<head>");
+  client.println("<meta charset='UTF-8'>");
+  client.println("<meta name='viewport' content='width=device-width, initial-scale=1.0'>");
+  client.println("<title>お部屋管理ページ</title>");
+  client.println("<style>");
+  client.println("body { font-family: Arial, sans-serif; background-color: #f0f8ff; color: #333; text-align: center; margin: 0; padding: 20px; }");
+  client.println("h1 { font-size: 8vw; color: #2a9d8f; margin-bottom: 20px; }");
+  client.println("p { font-size: 5vw; margin: 10px 0; }");
+  client.println("a { display: inline-block; text-decoration: none; color: white; background-color: #264653; padding: 10px 20px; border-radius: 10px; font-size: 4.5vw; }");
+  client.println("a:hover { background-color: #1d3557; }");
+  client.println("</style>");
+  client.println("</head>");
+  client.println("<body>");
+  client.println("<h1>お部屋管理ページ</h1>");
+  client.println("<p>温度と湿度が知りたい！</p>");
+  client.println("<a href=\"/H\">ここ押して！</a>");
+  client.println("<p>扇子を仰いで！</p>");
+  client.println("<a href=\"/L\">ここ押して！</a>");
+  client.println("</body>");
+  client.println("</html>");
+}
+
+void sendTemperatureHumidity(WiFiClient& client) {
+  float humidity, temperature;
+  readSensorData(humidity, temperature);
+
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-type:text/html; charset=UTF-8");
+  client.println("Cache-Control: no-store, no-cache, must-revalidate, max-age=0"); // No-cache headers
+  client.println("Pragma: no-cache");
+  client.println();
+
+  // HTML content for temperature and humidity
+  client.println("<!DOCTYPE html>");
+  client.println("<html lang='ja'>");
+  client.println("<head>");
+  client.println("<meta charset='UTF-8'>");
+  client.println("<meta name='viewport' content='width=device-width, initial-scale=1.0'>");
+  client.println("<title>温度と湿度</title>");
+  client.println("<style>");
+  client.println("body { font-family: Arial, sans-serif; background-color: #f0f8ff; color: #333; text-align: center; margin: 0; padding: 20px; }");
+  client.println("h1 { font-size: 8vw; color: #2a9d8f; margin-bottom: 20px; }");
+  client.println("p { font-size: 5vw; margin: 10px 0; }");
+  client.println("a { display: inline-block; text-decoration: none; color: white; background-color: #264653; padding: 10px 20px; border-radius: 10px; font-size: 4.5vw; }");
+  client.println("a:hover { background-color: #1d3557; }");
+  client.println(".advice { font-size: 4.5vw; color: #e63946; margin-top: 20px; }");
+  client.println("</style>");
+  client.println("</head>");
+  client.println("<body>");
+  client.println("<h1>お部屋管理ページ</h1>");
+  client.println("<p>T= " + String(temperature) + "°C</p>");
+  client.println("<p>H= " + String(humidity) + "%</p>");
+  client.println("<p><a href=\"/H\">ホーム画面に戻る</a></p>");
+
+  // Add temperature and humidity advice
+  if (temperature >= 28) {
+    client.println("<p class='advice'>室温が高いので、エアコンなどをつけましょう。</p>");
+    client.println("<p><a href=\"/L\">扇子を仰いでほしい？ここ押して！</a></p>");
+  } else if (temperature <= 20) {
+    client.println("<p class='advice'>室温が低いので、暖房などをつけましょう。</p>");
+  }
+
+  if (humidity >= 75) {
+    client.println("<p class='advice'>湿度が高いので、除湿しましょう。</p>");
+  }
+
+  client.println("</body>");
+  client.println("</html>");
+}
+
+// Sensor data functions
+void readSensorData(float& humidity, float& temperature) {
+  uint8_t buf[6];
+  long data;
+  int flag = 1;
+
+  while (flag) {
+    Wire.beginTransmission(ADR);
+    Wire.write(0xac);
+    Wire.write(0x33);
+    Wire.write(0x00);
+    Wire.endTransmission();
+    delay(100);
+
+    Wire.requestFrom(ADR, 6);
+    for (uint8_t i = 0; i < 6; i++) {
+      buf[i] = Wire.read();
+    }
+
+    if (buf[0] & 0x80) {
+      Serial.println("Measurement not complete");
+    } else {
+      flag = 0;
+    }
+  }
+
+  data = (buf[1] << 12) | (buf[2] << 4) | (buf[3] >> 4);
+  humidity = data / 10485.76;
+  data = ((buf[3] & 0x0F) << 16) | (buf[4] << 8) | buf[5];
+  temperature = data / 5242.88 - 50;
+}
+
+void printWifiStatus() {
+  Serial.print("SSID: ");
+  Serial.println(WiFi.SSID());
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+  Serial.print("Signal strength (RSSI): ");
+  Serial.print(WiFi.RSSI());
+  Serial.println(" dBm");
+  Serial.print("To see this page in action, open a browser to http://");
+  Serial.println(WiFi.localIP());
+}
+
+void sendMessage(String message) { 
+  String path = "/api/notify";
+  String query = "message=" + message;
+
+  client.beginRequest();
+  client.post(path);
+  client.sendHeader("Content-Type", "application/x-www-form-urlencoded");
+  client.sendHeader("Authorization", "Bearer " + token);
+  client.sendHeader("Content-Length", query.length());
+  client.beginBody();
+  client.print(query);
+  client.endRequest();
+
+  int statusCode = client.responseStatusCode();
+  String response = client.responseBody();
+  
+  Serial.print("Status Code: ");
+  Serial.println(statusCode);
+  Serial.println("Response: ");
+  Serial.println(response);
+}
