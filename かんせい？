@@ -1,0 +1,411 @@
+#define SECRET_SSID "aterm-43e35d-g"
+#define SECRET_PASS "54f01a74b0b9f"
+
+#include <WiFiS3.h>
+#include <Wire.h>
+// Network credentials
+char ssid[] = SECRET_SSID;
+char pass[] = SECRET_PASS;
+int status = WL_IDLE_STATUS;
+WiFiServer server(80);
+WiFiClient client = server.available();
+
+#include <ArduinoHttpClient.h>
+const String token = "Ed6nNhYXsn7Bu61NCIFE2DdIqcDq9IfuUrc8fMsSbWj";
+const char *serverAddress = "notify-api.line.me";
+const int port = 443;  // HTTPSを使用
+
+WiFiSSLClient wifiClient;
+HttpClient clientForLine(wifiClient, serverAddress, port);
+bool messageSent = false; // Flag to track if the message has been sent
+String currentLine = "";
+
+#define ADR 0x38
+
+#include <Servo.h>
+Servo servo; 
+int moved = 0;
+
+int ad;
+
+#define CHK_CNT 8           // センサーサンプル数
+#define AD_VCC 4.85         // センサーの基準電圧
+#define EMF_RANGE 0.045     // EMFの範囲
+#define EMF_0_PPM 400      // 初期のCO2濃度
+#define EMF_1_PPM 4000     // 最高のCO2濃度
+#define BOARD_GAIN 10      // ボードのゲイン
+#define EMF_BASE 0.20      // 初期EMFの基準値
+
+struct AI_FILT {
+  uint8_t wp;               // 書き込みポインタ
+  uint16_t data[CHK_CNT];   // センサー値の格納配列
+  uint16_t average;         // 平均値
+};
+
+AI_FILT mg812;
+double emfmax = EMF_BASE;   // 最大EMFの初期値
+double co2;
+
+
+void setup() {
+  initializeSerial();
+  initializeWiFi();
+  initializeSensor();
+  startServer();
+  servo.attach(3, 500, 2400);
+  //stabilize co2
+  for (int l=0; l<10; l++)
+  {
+    findco2(co2);
+  }
+
+}
+
+void loop()
+{ 
+  ad = analogRead(A0);  // Read the analog value
+
+  if (ad != 0 && !messageSent) 
+  {
+      sendMessage("人が来た！");
+      messageSent = true;  // Mark the message as sent
+  } 
+  else if (ad == 0) 
+  {
+      messageSent = false;  // Reset the flag when the condition is no longer met
+  }
+
+  handleClient();  // Handle any incoming client requests
+}
+
+
+
+// Initialization functions
+void initializeSerial() {
+  Serial.begin(115200);
+  pinMode(LED_BUILTIN, OUTPUT);
+}
+
+void initializeWiFi() {
+  if (WiFi.status() == WL_NO_MODULE) {
+    Serial.println("Communication with WiFi module failed!");
+    while (true);
+  }
+
+  if (WiFi.firmwareVersion() < WIFI_FIRMWARE_LATEST_VERSION) {
+    Serial.println("Please upgrade the firmware");
+  }
+
+  connectToWiFi();
+}
+
+void connectToWiFi() {
+  while (status != WL_CONNECTED) {
+    Serial.print("Attempting to connect to Network named: ");
+    Serial.println(ssid);
+    status = WiFi.begin(ssid, pass);
+    delay(10000);
+  }
+  printWifiStatus();
+}
+
+void initializeSensor() {
+  Wire.begin();
+}
+
+void startServer() {
+  server.begin();
+  Serial.println("Server started");
+  printWifiStatus();
+}
+
+void printWifiStatus() {
+  Serial.print("SSID: ");
+  Serial.println(WiFi.SSID());
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+  Serial.print("Signal strength (RSSI): ");
+  Serial.print(WiFi.RSSI());
+  Serial.println(" dBm");
+  Serial.print("To see this page in action, open a browser to http://");
+  Serial.println(WiFi.localIP());
+}
+
+// Client handling functions
+void handleClient() {
+  WiFiClient client = server.available();  // Check for available clients
+  if (client) {
+    Serial.println("New client connected");
+    processClientRequest(client);
+    client.stop();  // Close the connection
+    Serial.println("Client disconnected");
+  }
+}
+
+
+void processClientRequest(WiFiClient& client) {
+  while (client.connected()) {
+    if (client.available()) {
+      char c = client.read();
+      Serial.write(c);
+
+      if (c == '\n') {
+        if (currentLine.length() == 0) {
+          sendHttpResponse(client);
+          break;
+        } else {
+          currentLine = "";
+        }
+      } else if (c != '\r') {
+        currentLine += c;
+      }
+
+      if (currentLine.endsWith("GET /H")) {
+        sendTemperatureHumidity(client);
+      }
+      if (currentLine.endsWith("GET /L")) {
+        moveMoter(client);
+      }
+      if (currentLine.endsWith("GET /F")) {
+        sendco2(client);
+      }
+    }
+  }
+}
+
+void sendHttpResponse(WiFiClient& client) {
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-type:text/html; charset=UTF-8");
+  client.println("Cache-Control: no-store, no-cache, must-revalidate, max-age=0"); // No-cache headers
+  client.println("Pragma: no-cache");
+  client.println();
+
+  // HTML content
+  client.println("<!DOCTYPE html>");
+  client.println("<html lang='ja'>");
+  client.println("<head>");
+  client.println("<meta charset='UTF-8'>");
+  client.println("<meta name='viewport' content='width=device-width, initial-scale=1.0'>");
+  client.println("<title>お部屋管理ページ</title>");
+  client.println("<style>");
+  client.println("body { font-family: Arial, sans-serif; background-color: #f0f8ff; color: #333; text-align: center; margin: 0; padding: 20px; }");
+  client.println("h1 { font-size: 8vw; color: #2a9d8f; margin-bottom: 20px; }");
+  client.println("p { font-size: 5vw; margin: 10px 0; }");
+  client.println("a { display: inline-block; text-decoration: none; color: white; background-color: #264653; padding: 10px 20px; border-radius: 10px; font-size: 4.5vw; }");
+  client.println("a:hover { background-color: #1d3557; }");
+  client.println("</style>");
+  client.println("</head>");
+  client.println("<body>");
+  client.println("<h1>お部屋管理ページ</h1>");
+  client.println("<p>温度と湿度が知りたい！</p>");
+  client.println("<a href=\"/H\">ここ押して！</a>");
+  client.println("<p>電気のリモコン押して！</p>");
+  client.println("<a href=\"/L\">ここ押して！</a>");
+  client.println("<p>C02濃度が知りたい！</p>");
+  client.println("<a href=\"/F\">ここ押して！</a>");
+  client.println("</body>");
+  client.println("</html>");
+}
+
+// Function to send the common HTTP headers and HTML structure
+void sendHTMLResponse(WiFiClient& client, const String& title, const String& bodyContent) {
+  // HTTP headers
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-type:text/html; charset=UTF-8");
+  client.println("Cache-Control: no-store, no-cache, must-revalidate, max-age=0"); // No-cache headers
+  client.println("Pragma: no-cache");
+  client.println();
+
+  // HTML content
+  client.println("<!DOCTYPE html>");
+  client.println("<html lang='ja'>");
+  client.println("<head>");
+  client.println("<meta charset='UTF-8'>");
+  client.println("<meta name='viewport' content='width=device-width, initial-scale=1.0'>");
+  client.println("<title>" + title + "</title>");
+  client.println("<style>");
+  client.println("body { font-family: Arial, sans-serif; background-color: #f0f8ff; color: #333; text-align: center; margin: 0; padding: 20px; }");
+  client.println("h1 { font-size: 8vw; color: #2a9d8f; margin-bottom: 20px; }");
+  client.println("p { font-size: 5vw; margin: 10px 0; }");
+  client.println("a { display: inline-block; text-decoration: none; color: white; background-color: #264653; padding: 10px 20px; border-radius: 10px; font-size: 4.5vw; }");
+  client.println("a:hover { background-color: #1d3557; }");
+  client.println(".advice { font-size: 4.5vw; color: #e63946; margin-top: 20px; }");
+  client.println("</style>");
+  client.println("</head>");
+  client.println("<body>");
+  client.println("<h1>" + title + "</h1>");
+  client.println(bodyContent);
+  client.println("</body>");
+  client.println("</html>");
+}
+
+// Function to send temperature and humidity information
+void sendTemperatureHumidity(WiFiClient& client) {
+  float humidity, temperature;
+  findTempHumidity(humidity, temperature);
+
+  // Create body content for temperature and humidity
+  String bodyContent = "<p>T= " + String(temperature) + "°C</p>";
+  bodyContent += "<p>H= " + String(humidity) + "%</p>";
+  bodyContent += "<p><a href=\"/H\">ホーム画面に戻る</a></p>";
+
+  // Temperature-related advice
+  if (temperature >= 28) {
+    bodyContent += "<p class='advice'>室温が高いので、エアコンなどをつけましょう。</p>";
+    sendMessage("室温が高いみたいです、暑そうですね。");
+  } else if (temperature <= 20) {
+    bodyContent += "<p class='advice'>室温が低いので、暖房などをつけましょう。</p>";
+    sendMessage("室温が低いみたいです、寒そうですね。");
+  }
+  else
+  {
+    bodyContent += "<p class='advice'>適正な室温です。</p>";
+    sendMessage("快適な室温で過ごしてそうです。");
+
+  }
+
+  if (humidity >= 75) 
+  {
+    bodyContent += "<p class='advice'>湿度が高いので、除湿しましょう。</p>";
+    sendMessage("湿度が高いそうです、じめじめですかね。");
+
+  } 
+  else if (humidity <= 30) 
+  {
+    bodyContent += "<p class='advice'>湿度が低いので、加湿しましょう。</p>";
+    sendMessage("湿度が低いそうです、からからですかね。");
+
+  } else 
+  {
+    bodyContent += "<p class='advice'>湿度が適切です。快適な空気環境です。</p>";
+        sendMessage("快適な湿度で過ごしてそうです。");
+
+  }
+
+
+  // Send HTML response
+  sendHTMLResponse(client, "温度と湿度", bodyContent);
+}
+
+// Function to send CO2 concentration information
+void sendco2(WiFiClient& client) {
+  double co2;
+  findco2(co2);
+
+  // Create body content for CO2 concentration
+  String bodyContent = "<p>CO2濃度= " + String(co2) + "ppm</p>";
+  bodyContent += "<p><a href=\"/H\">ホーム画面に戻る</a></p>";
+
+  if (co2 >= 1000) 
+  {
+    bodyContent += "<p class='advice'>CO2濃度が高いです。窓を開けて換気するか、空気清浄機を使用しましょう。</p>";
+    sendMessage("とても高いCO2濃度で過ごしています、頭が痛くなるかもしれませんね。");
+  } 
+  else if (co2 >= 700) 
+  {
+    bodyContent += "<p class='advice'>CO2濃度が少し高いです。換気をしたほうがいいかもしれません。</p>";
+    sendMessage("少し高いCO2濃度で過ごしているみたいです。");
+
+  } 
+  else
+  {
+    bodyContent += "<p class='advice'>CO2濃度が適切です。快適な空気環境です。</p>";
+    sendMessage("快適なCO2濃度で過ごしてそうです。");
+  }
+  // Send HTML response
+  sendHTMLResponse(client, "CO2濃度", bodyContent);
+}
+
+
+void moveMoter(WiFiClient& client) 
+{
+  if (moved == 1)
+  {
+    servo.write(100); 
+  }  
+  else
+  {
+    servo.write(0);
+  }
+  moved = moved*-1;
+}
+
+void sendMessage(String message) { 
+  String path = "/api/notify";
+  String query = "message=" + message;
+
+  clientForLine.beginRequest();
+  clientForLine.post(path);
+  clientForLine.sendHeader("Content-Type", "application/x-www-form-urlencoded");
+  clientForLine.sendHeader("Authorization", "Bearer " + token);
+  clientForLine.sendHeader("Content-Length", query.length());
+  clientForLine.beginBody();
+  clientForLine.print(query);
+  clientForLine.endRequest();
+}
+
+void findTempHumidity(float& humidity, float& temperature) {
+  uint8_t buf[6];
+  long data;
+  int flag = 1;
+
+  while (flag) {
+    Wire.beginTransmission(ADR);
+    Wire.write(0xac);
+    Wire.write(0x33);
+    Wire.write(0x00);
+    Wire.endTransmission();
+    delay(100);
+
+    Wire.requestFrom(ADR, 6);
+    for (uint8_t i = 0; i < 6; i++) {
+      buf[i] = Wire.read();
+    }
+
+    if (buf[0] & 0x80) {
+      Serial.println("Measurement not complete");
+    } else {
+      flag = 0;
+    }
+  }
+
+  data = (buf[1] << 12) | (buf[2] << 4) | (buf[3] >> 4);
+  humidity = data / 10485.76;
+  data = ((buf[3] & 0x0F) << 16) | (buf[4] << 8) | buf[5];
+  temperature = data / 5242.88 - 50;
+}
+
+void findco2 (double& co2) 
+{
+  uint16_t sum = 0;
+  double e, k;
+
+  // センサー値を読み込み、配列に保存
+  mg812.data[mg812.wp] = analogRead(A1);
+
+  // 書き込みポインタを更新
+  if (++mg812.wp >= CHK_CNT) {
+    mg812.wp = 0; // 配列の最初に戻す
+  }
+
+  // 平均値を計算
+  for (uint8_t i = 0; i < CHK_CNT; i++) {
+    sum += mg812.data[i];
+  }
+  mg812.average = sum / CHK_CNT;
+
+  // 電圧計算
+  e = (double)mg812.average / 0x400 * AD_VCC / BOARD_GAIN;
+
+  // 比例定数計算
+  k = (1 / EMF_RANGE) * log10((double)EMF_1_PPM / EMF_0_PPM);
+
+  // CO2濃度計算
+  co2 = (double)EMF_0_PPM * pow(10, (k * (emfmax - e)));
+
+  // EMF値の更新（もしセンサー値が以前の最大値より高ければ）
+  if (e >= emfmax + 0.002) {
+    emfmax = e;
+  }
+
+}
