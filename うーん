@@ -1,0 +1,37 @@
+#define AD_VCC 4.85
+#define EMF_RANGE 0.045
+#define EMF_0_PPM 400
+#define EMF_1_PPM 4000
+#define BOARD_GAIN 10
+
+double emfmax = 0.20; // 初期電圧最大値
+uint16_t mg812_data;  // センサー値保存用
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000); // シリアルモニタが起動するまで待機
+
+  Serial.println("Starting CO2 Measurement...");
+  
+  mg812_data = analogRead(A1); // センサー値を読み取る
+  Serial.print("Raw Sensor Value: ");
+  Serial.println(mg812_data); // アナログ値を確認
+
+  findco2_once(); // CO2濃度を計算
+}
+
+void loop() {
+  // ここでは何もしない
+}
+
+void findco2_once() {
+  // センサー値を元にCO2濃度を計算
+  double e = (double)mg812_data / 1024 * AD_VCC / BOARD_GAIN; // 電圧計算
+  double k = (1 / EMF_RANGE) * log10((double)EMF_1_PPM / EMF_0_PPM); // 比例定数
+  double co2 = (double)EMF_0_PPM * pow(10, k * (emfmax - e)); // CO2濃度
+
+  // 結果をシリアル出力
+  Serial.print("CO2 Concentration: ");
+  Serial.print(co2);
+  Serial.println(" ppm");
+}
